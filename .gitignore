@@ -1,0 +1,95 @@
+# ============================
+# Global Python build/cache
+# ============================
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+*.so
+*.egg-info/
+.build/
+build/
+dist/
+.eggs/
+.mypy_cache/
+.pytype/
+.ruff_cache/
+.pytest_cache/
+.cache/
+
+# ============================
+# Environments
+# ============================
+# Any .env file, but keep .env.example files tracked
+*.env
+!.env.example
+
+# Common virtualenv names (root or subfolders)
+.venv/
+venv/
+**/.venv/
+**/venv/
+pip-wheel-metadata/
+
+# ============================
+# Editors / OS junk
+# ============================
+.vscode/
+.idea/
+*.swp
+*~
+.DS_Store
+Thumbs.db
+
+# ============================
+# Logs & runtime files
+# ============================
+logs/
+*.log
+
+# ============================
+# Coverage & test artifacts
+# ============================
+.coverage
+.coverage.*
+htmlcov/
+coverage.xml
+pytestdebug.log
+
+# ============================
+# Docker
+# ============================
+docker-data/
+*~lock.json
+
+# ============================
+# LLM server app data
+# (copied from old llm_server .gitignore)
+# ============================
+# All runtime telemetry lives here; we only track known_locations.json.
+llm_server/app/map_data/
+!llm_server/app/map_data/known_locations.json
+# Optional: keep directory in Git even if empty
+llm_server/app/map_data/.gitkeep
+
+# Runtime session store (LLM conversation history)
+llm_server/app/runtime_state/sessions.json
+
+# ============================
+# STT server data (models, env, venv)
+# ============================
+stt_server/models/
+stt_server/.venv/
+stt_server/.env
+
+# ============================
+# Node (if you add a tiny UI later)
+# ============================
+node_modules/
+npm-debug.log*
+yarn-error.log
+
+# ============================
+# Misc
+# ============================
+.python-version

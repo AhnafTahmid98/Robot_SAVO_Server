@@ -1,0 +1,60 @@
+##############################################
+# Core web framework + ASGI server
+##############################################
+
+# FastAPI for building the HTTP API (/health, /speech)
+fastapi>=0.115.0
+
+# Uvicorn ASGI server with extra extras (uvloop, httptools, etc.)
+uvicorn[standard]>=0.30.0
+
+
+##############################################
+# Config, validation, and env handling
+##############################################
+
+# Pydantic v2 for settings & response models
+pydantic>=2.8.2
+
+# Load .env file for local/dev configuration
+python-dotenv>=1.0.1
+
+
+##############################################
+# Audio + STT engine
+##############################################
+
+# NumPy for numeric arrays and resampling
+numpy>=1.26.0
+
+# soundfile for decoding WAV/OGG/etc. from bytes
+soundfile>=0.12.1
+
+# faster-whisper (Systran) — the actual STT model runtime
+faster-whisper>=1.0.0
+
+
+##############################################
+# HTTP client (LLM server calls)
+##############################################
+
+# httpx for calling the Robot Savo LLM server (/chat)
+httpx>=0.27.0
+
+
+##############################################
+# FastAPI file upload support
+##############################################
+
+# REQUIRED: FastAPI needs this to handle multipart/form-data (file uploads)
+# Without this, /speech with file=@... will crash with:
+# "Form data requires 'python-multipart' to be installed."
+python-multipart>=0.0.9
+
+
+##############################################
+# Logging and observability
+##############################################
+
+# loguru for nicer structured logging
+loguru>=0.7.2

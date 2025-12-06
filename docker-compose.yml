@@ -1,0 +1,48 @@
+services:
+  llm_server:
+    container_name: robot-llm
+    build:
+      context: ./llm_server
+      dockerfile: Dockerfile
+    working_dir: /app
+    env_file:
+      - ./llm_server/.env
+    # If you ever want to mount map_data or logs, you can add volumes here.
+    ports:
+      - "8000:8000"           # Host → LLM HTTP API
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+
+  stt_server:
+    container_name: robot-stt
+    build:
+      context: ./stt_server
+      dockerfile: Dockerfile
+    working_dir: /app
+    env_file:
+      - ./stt_server/.env
+    environment:
+      # Override to match the Docker volume mount for models
+      STT_MODELS_DIR: "/models"
+      # Inside Docker, llm_server is reachable by this hostname
+      LLM_SERVER_URL: "http://llm_server:8000"
+    volumes:
+      # Host faster-whisper models → container /models
+      - ./stt_server/models:/models
+    ports:
+      - "9000:9000"           # Host → STT+LLM gateway (/speech)
+    depends_on:
+      llm_server:
+        condition: service_started
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:9000/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 20s
