@@ -1,27 +1,32 @@
 # app/providers/tier1_online.py
 # -*- coding: utf-8 -*-
 """
-Robot Savo LLM Server — Tier1 Online Provider (OpenRouter)
-----------------------------------------------------------
-This module is the ONLY place that knows how to talk to OpenRouter.
+Robot Savo LLM Server — Tier1 Online Provider (OpenAI GPT-4o-mini)
+-------------------------------------------------------------------
+This module now supports *two* conceptual Tier1 engines:
 
-Responsibilities:
-- Build the HTTP request (URL, headers, JSON payload).
-- Handle different models (Grok, LLaMA, DeepSeek, etc.).
-- Enable Grok reasoning when appropriate.
-- Parse the response and return assistant text.
+1) OpenAI GPT-4o-mini  (DEFAULT, ACTIVE)
+2) OpenRouter models   (LEGACY, kept in comments for future use)
 
-It is used by app/core/generate.py, which:
-- Chooses which model to call (from tier1_model_candidates in config).
-- Falls back to Tier2 / Tier3 if this provider raises Tier1Error.
+ACTIVE behavior:
+- Uses the official OpenAI Python client (no raw `requests`).
+- Reads config from app/core/config.py (settings.*).
+- Raises Tier1Error on failure so generate.py can fall back to Tier2/Tier3.
+
+LEGACY behavior (OpenRouter):
+- Entire implementation is preserved below in comments.
+- To re-enable someday, you would:
+    - uncomment the OpenRouter section (including `import requests`)
+    - set TIER1_PROVIDER=openrouter in .env
+    - provide TIER1_OPENROUTER_API_KEY, etc.
 """
 
 from __future__ import annotations
 
 import logging
-from typing import Any, Dict, List
+from typing import Any, Dict, List, Optional
 
-import requests
+from openai import OpenAI  # Official OpenAI client
 
 from app.core.config import settings
 
@@ -32,143 +37,220 @@ class Tier1Error(Exception):
     """Raised when Tier1 (online) fails in a recoverable way."""
 
 
-def _build_openrouter_payload(
-    messages: List[Dict[str, str]],
-    model_name: str,
-) -> Dict[str, Any]:
+# ============================================================================
+# OPENAI (GPT-4o-mini) — Primary Tier1 Provider (NO `requests`)
+# ============================================================================
+
+
+def _build_openai_client() -> OpenAI:
     """
-    Build the JSON payload for OpenRouter.
+    Build an OpenAI client from settings.openai_api_key.
 
-    Parameters
-    ----------
-    messages:
-        List of {"role": "system"|"user"|"assistant", "content": "..."} dicts.
-    model_name:
-        Any OpenRouter model ID, for example:
-            - "x-ai/grok-4.1-fast:free"
-            - "meta-llama/llama-3.3-70b-instruct:free"
-            - "deepseek/deepseek-chat-v3-0324:free"
-
-    Notes
-    -----
-    - For Grok models, we automatically enable reasoning via:
-          extra_body.reasoning.enabled = True
-    - Other models just receive the normal chat payload.
+    The API key normally comes from the OPENAI_API_KEY environment variable,
+    mapped into settings by pydantic-settings.
     """
-    payload: Dict[str, Any] = {
-        "model": model_name,
-        "messages": messages,
-    }
+    api_key = getattr(settings, "openai_api_key", None)
+    if not api_key:
+        raise Tier1Error("OpenAI API key missing (settings.openai_api_key is empty).")
 
-    # If we are using a Grok model, enable reasoning like in the OpenRouter docs
-    if model_name.startswith("x-ai/grok"):
-        payload["extra_body"] = {"reasoning": {"enabled": True}}
-
-    return payload
+    return OpenAI(api_key=api_key)
 
 
-def call_tier1_model(
+def _call_openai_chat_completions(
     messages: List[Dict[str, str]],
-    model_name: str,
+    model_name: Optional[str] = None,
 ) -> str:
     """
-    Call a Tier1 online model via OpenRouter and return the assistant's text.
+    Call OpenAI Chat Completions (GPT-4o-mini by default) and return assistant text.
 
     Parameters
     ----------
     messages:
         List of {"role": "system"|"user"|"assistant", "content": "..."} dicts.
     model_name:
-        Which OpenRouter model to use (string).
+        Name of the OpenAI model (defaults to settings.tier1_openai_model).
 
     Returns
     -------
-    content: str
-        The assistant's reply (already stripped).
+    str
+        Assistant reply content (trimmed).
 
     Raises
     ------
     Tier1Error
-        If Tier1 is disabled, misconfigured, or the HTTP/JSON fails.
+        On any client / API / response error.
     """
-    if not settings.tier1_enabled:
-        raise Tier1Error("Tier1 is disabled in config.")
-
-    api_key = settings.tier1_api_key
-    if not api_key:
-        raise Tier1Error("Tier1 API key is missing.")
-
-    url = settings.tier1_base_url
-
-    headers = {
-        "Authorization": f"Bearer {api_key}",
-        "Content-Type": "application/json",
-    }
-
-    payload = _build_openrouter_payload(messages, model_name)
+    client = _build_openai_client()
+    model = model_name or getattr(settings, "tier1_openai_model", "gpt-4o-mini")
 
     try:
-        resp = requests.post(
-            url,
-            headers=headers,
-            json=payload,
-            timeout=settings.tier1_timeout_s,
+        resp = client.chat.completions.create(
+            model=model,
+            messages=messages,
+            # You can wire these to config later if you want:
+            # max_tokens=getattr(settings, "tier1_openai_max_tokens", 350),
+            # temperature=getattr(settings, "tier1_openai_temperature", 0.6),
         )
-    except requests.RequestException as exc:
-        raise Tier1Error(f"Tier1 HTTP error: {exc}") from exc
-
-    if resp.status_code != 200:
-        text_preview = resp.text[:200].replace("\n", " ")
-        raise Tier1Error(f"Tier1 HTTP {resp.status_code}: {text_preview}")
+    except Exception as exc:  # noqa: BLE001
+        logger.exception("OpenAI ChatCompletion failed: %s", exc)
+        raise Tier1Error(f"OpenAI ChatCompletion error: {exc}") from exc
 
     try:
-        data = resp.json()
-    except ValueError as exc:
-        raise Tier1Error("Tier1 returned non-JSON response.") from exc
-
-    try:
-        # OpenAI/OpenRouter-style: choices[0].message.content
-        content = data["choices"][0]["message"]["content"]
-    except (KeyError, IndexError, TypeError) as exc:
+        choice0 = resp.choices[0]
+        content = choice0.message.content
+    except (AttributeError, IndexError, TypeError) as exc:
         raise Tier1Error(
-            "Tier1 response JSON missing choices[0].message.content"
+            "OpenAI response missing choices[0].message.content"
         ) from exc
 
     if not isinstance(content, str) or not content.strip():
-        raise Tier1Error("Tier1 returned empty content.")
+        raise Tier1Error("OpenAI returned empty content.")
 
     return content.strip()
 
 
+# ============================================================================
+# OPENROUTER (Legacy Tier1 Provider) — KEPT *ONLY* IN COMMENTS
+# ============================================================================
+
+# NOTE:
+#   - This whole section is commented out.
+#   - If you ever want to use OpenRouter again, you can:
+#       1) Uncomment the import and functions below.
+#       2) Set TIER1_PROVIDER=openrouter in your .env
+#       3) Provide TIER1_OPENROUTER_API_KEY, etc., in .env / config.
+
+# import requests
+#
+#
+# def _build_openrouter_payload(
+#     messages: List[Dict[str, str]],
+#     model_name: str,
+# ) -> Dict[str, Any]:
+#     """Original payload builder (kept for future use)."""
+#     payload: Dict[str, Any] = {
+#         "model": model_name,
+#         "messages": messages,
+#     }
+#     # Example: enable Grok reasoning
+#     if model_name.startswith("x-ai/grok"):
+#         payload["extra_body"] = {"reasoning": {"enabled": True}}
+#     return payload
+#
+#
+# def _call_openrouter_chat(
+#     messages: List[Dict[str, str]],
+#     model_name: str,
+# ) -> str:
+#     """
+#     Call OpenRouter chat completions and return assistant text.
+#     """
+#     api_key = getattr(settings, "tier1_openrouter_api_key", None)
+#     base_url = getattr(
+#         settings,
+#         "tier1_openrouter_base_url",
+#         "https://openrouter.ai/api/v1/chat/completions",
+#     )
+#     if not api_key:
+#         raise Tier1Error("OpenRouter API key is missing.")
+#
+#     headers = {
+#         "Authorization": f"Bearer {api_key}",
+#         "Content-Type": "application/json",
+#     }
+#     payload = _build_openrouter_payload(messages, model_name)
+#
+#     try:
+#         resp = requests.post(
+#             base_url,
+#             headers=headers,
+#             json=payload,
+#             timeout=settings.tier1_timeout_s,
+#         )
+#     except requests.RequestException as exc:
+#         raise Tier1Error(f"OpenRouter HTTP error: {exc}") from exc
+#
+#     if resp.status_code != 200:
+#         text_preview = resp.text[:200].replace("\n", " ")
+#         raise Tier1Error(f"OpenRouter HTTP {resp.status_code}: {text_preview}")
+#
+#     try:
+#         data = resp.json()
+#         content = data["choices"][0]["message"]["content"]
+#     except Exception as exc:  # noqa: BLE001
+#         raise Tier1Error(
+#             "OpenRouter response missing choices[0].message.content"
+#         ) from exc
+#
+#     if not isinstance(content, str) or not content.strip():
+#         raise Tier1Error("OpenRouter returned empty content.")
+#
+#     return content.strip()
+
+
+# ============================================================================
+# AUTO-SELECT Tier1 Provider
+# ============================================================================
+
+
+def call_tier1_model(
+    messages: List[Dict[str, str]],
+) -> str:
+    """
+    Auto-select Tier1 provider based on settings.
+
+    ACTIVE:
+        - If settings.tier1_provider == "openai"  → use GPT-4o-mini via OpenAI client.
+
+    LEGACY (commented):
+        - If settings.tier1_provider == "openrouter" → would use OpenRouter,
+          but that path is currently disabled / commented out.
+
+    Raises
+    ------
+    Tier1Error
+        If Tier1 is disabled, misconfigured, or provider is unsupported.
+    """
+    if not settings.tier1_enabled:
+        raise Tier1Error("Tier1 disabled in config.")
+
+    provider = str(getattr(settings, "tier1_provider", "openai")).lower()
+
+    # -------------- OpenAI GPT-4o-mini (default, active) ----------------
+    if provider == "openai":
+        model_name = getattr(settings, "tier1_openai_model", "gpt-4o-mini")
+        return _call_openai_chat_completions(messages, model_name=model_name)
+
+    # -------------- OpenRouter (legacy, currently disabled) --------------
+    # if provider == "openrouter":
+    #     model = getattr(settings, "tier1_openrouter_model", "deepseek-chat")
+    #     return _call_openrouter_chat(messages, model_name=model)
+
+    raise Tier1Error(f"Unsupported or disabled Tier1 provider: {provider!r}")
+
+
+# ============================================================================
+# Self-test
+# ============================================================================
+
 if __name__ == "__main__":
-    """
-    Minimal self-test for Tier1 provider.
+    print("Robot Savo — Tier1 provider self-test\n")
+    print(f"Tier1 enabled : {settings.tier1_enabled}")
+    print(f"Tier1 provider: {getattr(settings, 'tier1_provider', 'openai')}")
+    print(f"OpenAI key set: {bool(getattr(settings, 'openai_api_key', None))}")
+    print(f"OpenAI model  : {getattr(settings, 'tier1_openai_model', 'gpt-4o-mini')}")
 
-    This only checks that:
-    - config can be loaded
-    - API key visibility
-    - payload building for Grok
-
-    It does NOT actually call OpenRouter by default to avoid burning tokens.
-    Uncomment the live-call section if you want to test with real API.
-    """
-    print("Robot Savo — tier1_online.py self-test\n")
-    print(f"Tier1 enabled: {settings.tier1_enabled}")
-    print(f"API key set  : {bool(settings.tier1_api_key)}")
-    print(f"Base URL     : {settings.tier1_base_url}")
-
-    example_messages = [
-        {"role": "user", "content": "Hello Robot Savo, how are you?"},
+    demo_messages = [
+        {"role": "system", "content": "You are Robot Savo."},
+        {"role": "user", "content": "Hello!"},
     ]
-    payload = _build_openrouter_payload(
-        example_messages,
-        model_name="x-ai/grok-4.1-fast:free",
-    )
-    print("Example payload keys:", list(payload.keys()))
-    print("extra_body for Grok :", payload.get("extra_body"))
 
-    # Live test (CAUTION: uses real API key and tokens!)
-    # from pprint import pprint
-    # reply = call_tier1_model(example_messages, "x-ai/grok-4.1-fast:free")
-    # print("\nLive reply:")
-    # pprint(reply)
+    print("\nNOTE: This self-test does NOT call the live API by default.")
+    # If you really want to test a live call, uncomment:
+    # if settings.tier1_enabled and getattr(settings, 'openai_api_key', None):
+    #     try:
+    #         reply = _call_openai_chat_completions(demo_messages)
+    #         print("Live reply (first 200 chars):")
+    #         print(reply[:200], "...")
+    #     except Tier1Error as exc:
+#         print("Tier1Error during live call:", exc)

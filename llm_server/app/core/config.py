@@ -3,33 +3,31 @@
 """
 Robot Savo LLM Server — Configuration
 -------------------------------------
-Central configuration for the LLM server, including:
+Upgraded for GPT-4o-mini Tier1 while keeping OpenRouter
+disabled but available for future use.
 
-- app metadata
-- API host/port
-- filesystem paths (prompts, map_data, logs)
-- Tier1 (online via OpenRouter),
-- Tier2 (local via Ollama HTTP),
-- Tier3 (template fallback),
-- basic safety limits.
-
+This configuration supports:
+- Tier1: OpenAI GPT-4o-mini (default)
+- Tier1 (optional future): OpenRouter (kept in comments)
+- Tier2: Local Ollama llama3.x
+- Tier3: Template fallback
 """
 
 from __future__ import annotations
 
 from pathlib import Path
-from typing import Literal
+from typing import Literal, Optional
 
 from pydantic import Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
+
 # ---------------------------------------------------------------------------
-# Path helpers
+# Base paths
 # ---------------------------------------------------------------------------
 
-# This file is: llm_server/app/core/config.py
-APP_DIR: Path = Path(__file__).resolve().parents[1]   # .../llm_server/app
-ROOT_DIR: Path = APP_DIR.parent                       # .../llm_server
+APP_DIR: Path = Path(__file__).resolve().parents[1]
+ROOT_DIR: Path = APP_DIR.parent
 
 PROMPTS_DIR: Path = APP_DIR / "prompts"
 MAP_DATA_DIR: Path = APP_DIR / "map_data"
@@ -38,26 +36,22 @@ LOGS_DIR.mkdir(exist_ok=True)
 
 
 # ---------------------------------------------------------------------------
-# Settings model
+# Settings
 # ---------------------------------------------------------------------------
-
 
 class Settings(BaseSettings):
     """
     Global configuration for the LLM server.
-
-    This class is instantiated once at import time as `settings`
-    and used everywhere in the codebase.
     """
 
-    # Tell pydantic-settings where to read .env, and how to behave with extras.
+    # Where .env is loaded
     model_config = SettingsConfigDict(
         env_file=ROOT_DIR / ".env",
         env_file_encoding="utf-8",
         extra="ignore",
     )
 
-    # --- App / server basics -----------------------------------------------
+    # ---------------------------- Server basics -----------------------------
     app_name: str = "Robot Savo LLM Server"
     environment: Literal["development", "production", "test"] = "development"
     debug: bool = True
@@ -65,87 +59,97 @@ class Settings(BaseSettings):
     api_host: str = "0.0.0.0"
     api_port: int = 8000
 
-    # --- Filesystem paths ---------------------------------------------------
-    # Base directories
+    # ---------------------------- Paths ------------------------------------
     prompts_dir: Path = PROMPTS_DIR
     map_data_dir: Path = MAP_DATA_DIR
     logs_dir: Path = LOGS_DIR
 
-    # Specific map_data files used by prompts + telemetry
-    # These are the canonical locations other modules should use.
     nav_state_path: Path = MAP_DATA_DIR / "nav_state.json"
     robot_status_path: Path = MAP_DATA_DIR / "robot_status.json"
     known_locations_path: Path = MAP_DATA_DIR / "known_locations.json"
 
-    # --- Tier toggles -------------------------------------------------------
-    tier1_enabled: bool = True   # Online LLM (OpenRouter)
-    tier2_enabled: bool = True   # Local LLM (Ollama HTTP)
-    tier3_enabled: bool = True   # Template fallback
+    # ---------------------------- Tier toggles ------------------------------
+    tier1_enabled: bool = True
+    tier2_enabled: bool = True
+    tier3_enabled: bool = True
 
-    # --- Tier1: Online provider (OpenRouter) -------------------------------
-    tier1_provider: Literal["openrouter"] = "openrouter"
-    tier1_base_url: str = "https://openrouter.ai/api/v1/chat/completions"
+    # -----------------------------------------------------------------------
+    # TIER 1 — ONLINE LLM (GPT-4o-mini by default)
+    # -----------------------------------------------------------------------
 
-    # ENV: TIER1_API_KEY=sk-or-v1-...
-    tier1_api_key: str | None = Field(
+    # Choose provider: "openai" or "openrouter"
+    # Default = openai (GPT-4o-mini)
+    tier1_provider: Literal["openai", "openrouter"] = "openai"
+
+    # ======================== OPENAI GPT-4o-mini ==========================
+    openai_api_key: Optional[str] = Field(
         default=None,
-        description="API key for Tier1 online provider (env: TIER1_API_KEY).",
+        description="OpenAI API key (env: OPENAI_API_KEY)",
     )
 
-    # Priority-ordered model list for Tier1 (first → last).
-    # This is what generate.py uses in the Tier1 loop.
-    tier1_model_candidates: list[str] = [
-        "x-ai/grok-4.1-fast:free",
+    # GPT-4o-mini model name
+    tier1_openai_model: str = "gpt-4o-mini"
+
+    # OpenAI REST endpoint
+    tier1_openai_base_url: str = "https://api.openai.com/v1/chat/completions"
+
+
+    # ======================== OPENROUTER (kept for future) =================
+    # NOTE: disabled by default. Kept for reference.
+    tier1_openrouter_base_url: str = "https://openrouter.ai/api/v1/chat/completions"
+    tier1_openrouter_api_key: Optional[str] = None
+
+    # You can keep previous model list for OpenRouter
+    tier1_openrouter_model_candidates: list[str] = [
+        "tngtech/deepseek-r1t2-chimera:free",
+        "qwen/qwen3-coder:free",
         "meta-llama/llama-3.3-70b-instruct:free",
-        "deepseek/deepseek-chat-v3-0324:free",
     ]
 
-    # Timeout (seconds) for Tier1 HTTP calls
+    # Timeout for Tier1
     tier1_timeout_s: float = 18.0
 
-    # --- Tier2: Local backend (Ollama HTTP) --------------------------------
-    #
-    # For Robot Savo right now, Tier2 is Ollama running on the PC/Mac.
-    # Configuration comes from:
-    #   TIER2_OLLAMA_URL   (e.g. http://localhost:11434/api/chat)
-    #   TIER2_OLLAMA_MODEL (e.g. llama3.2:latest)
-    #
-    tier2_ollama_url: str | None = Field(
-        default=None,
-        description=(
-            "Ollama chat endpoint, e.g. http://localhost:11434/api/chat "
-            "(env: TIER2_OLLAMA_URL)."
-        ),
-    )
-    tier2_ollama_model: str | None = Field(
-        default=None,
-        description=(
-            "Ollama model name (env: TIER2_OLLAMA_MODEL), "
-            "e.g. llama3.2:latest."
-        ),
-    )
 
-    # Optional generation parameters for Tier2 (used by providers.tier2_local)
+    # -----------------------------------------------------------------------
+    # TIER 2 — LOCAL OLLAMA
+    # -----------------------------------------------------------------------
+
+    tier2_ollama_url: Optional[str] = Field(
+        default=None,
+        description="Local Ollama endpoint, e.g. http://localhost:11434/api/chat",
+    )
+    tier2_ollama_model: Optional[str] = Field(
+        default=None,
+        description="Ollama model name, e.g. llama3.2:latest",
+    )
     tier2_temperature: float = 0.7
-    tier2_max_tokens: int = 512
+    tier2_max_tokens: int = 256
 
-    # --- Tier3: Template-based fallback ------------------------------------
+
+    # -----------------------------------------------------------------------
+    # TIER 3 — TEMPLATE FALLBACK
+    # -----------------------------------------------------------------------
+
     tier3_language: str = "en"
     tier3_enable_status_mode: bool = True
 
-    # --- Safety / limits ----------------------------------------------------
-    # These are global logical limits; they can be referenced by safety.py
-    # and pipeline.py to clamp outputs and context size.
-    max_reply_chars: int = 512       # Hard cap on reply length
-    max_history_turns: int = 8       # How many past turns to keep in context
+
+    # -----------------------------------------------------------------------
+    # SAFETY LIMITS
+    # -----------------------------------------------------------------------
+
+    max_reply_chars: int = 512
+    max_history_turns: int = 8
 
 
-# Single global settings instance used by the rest of the app.
+# Global instance
 settings = Settings()
 
 
+# ---------------------------------------------------------------------------
+# Self-test
+# ---------------------------------------------------------------------------
 if __name__ == "__main__":
-    # Minimal self-test so you can quickly verify config loading.
     print("Robot Savo — Settings self-test")
     print(f"ROOT_DIR        : {ROOT_DIR}")
     print(f"APP_DIR         : {APP_DIR}")
@@ -155,9 +159,18 @@ if __name__ == "__main__":
     print(f"NavState path   : {settings.nav_state_path}")
     print(f"RobotStatus path: {settings.robot_status_path}")
     print(f"Locations path  : {settings.known_locations_path}")
-    print(f"Environment     : {settings.environment}")
-    print(f"Tier1 enabled   : {settings.tier1_enabled}, API key set: {bool(settings.tier1_api_key)}")
-    print(f"Tier1 models    : {getattr(settings, 'tier1_model_candidates', [])}")
-    print(f"Tier2 enabled   : {settings.tier2_enabled}")
-    print(f"Tier2 Ollama    : url={settings.tier2_ollama_url!r}, model={settings.tier2_ollama_model!r}")
+
+    print("\n--- Tier1 config ---")
+    print(f"Tier1 enabled   : {settings.tier1_enabled}")
+    print(f"Tier1 provider  : {settings.tier1_provider}")
+    print(f"OpenAI key set  : {bool(settings.openai_api_key)}")
+    print(f"OpenAI model    : {settings.tier1_openai_model}")
+    print(f"OpenRouter key? : {bool(settings.tier1_openrouter_api_key)}")
+
+    print("\n--- Tier2 config ---")
+    print(f"Ollama enabled  : {settings.tier2_enabled}")
+    print(f"Ollama URL      : {settings.tier2_ollama_url}")
+    print(f"Ollama model    : {settings.tier2_ollama_model}")
+
+    print("\n--- Tier3 config ---")
     print(f"Tier3 enabled   : {settings.tier3_enabled}, language: {settings.tier3_language}")

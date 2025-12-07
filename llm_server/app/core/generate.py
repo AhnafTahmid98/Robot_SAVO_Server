@@ -13,7 +13,9 @@ This module handles the actual text generation workflow:
     - optional conversation history (from runtime_state)
 
 - Run the 3-tier chain:
-    1) Tier1: Online LLM (OpenRouter, multi-model with priority list)
+    1) Tier1: Online LLM
+          - OpenAI GPT-4o-mini by default (via tier1_online.call_tier1_model)
+          - OpenRouter support kept in code for future use
     2) Tier2: Local LLM (Ollama / llama-cpp, via providers.tier2_local)
     3) Tier3: Template fallback (fully offline, via providers.tier3_pi)
 
@@ -232,26 +234,62 @@ def generate_reply_text(
     # Current user turn as the final message
     messages.append({"role": "user", "content": user_prompt})
 
-    # 3) Try Tier1 (online) with model priority list
-    if settings.tier1_enabled and settings.tier1_api_key:
-        model_list = getattr(settings, "tier1_model_candidates", None) or []
+    # ------------------------------------------------------------------
+    # OLD TIER1 LOGIC (OpenRouter multi-model loop) — KEPT FOR REFERENCE
+    #
+    # if settings.tier1_enabled and settings.tier1_api_key:
+    #     model_list = getattr(settings, "tier1_model_candidates", None) or []
+    #
+    #     if not model_list:
+    #         logger.warning(
+    #             "Tier1 is enabled and API key is set, but no "
+    #             "tier1_model_candidates configured; skipping Tier1."
+    #         )
+    #     else:
+    #         for model_name in model_list:
+    #             try:
+    #                 reply_text = call_tier1_model(messages, model_name)
+    #                 return ModelCallResult(
+    #                     text=reply_text,
+    #                     used_tier="tier1",
+    #                     raw={"backend": "openrouter", "model": model_name},
+    #                 )
+    #             except Tier1Error as exc:
+    #                 logger.warning("Tier1 model %s failed: %s", model_name, exc)
+    #
+    # ------------------------------------------------------------------
 
-        if not model_list:
-            logger.warning(
-                "Tier1 is enabled and API key is set, but no "
-                "tier1_model_candidates configured; skipping Tier1."
+    # 3) New Tier1 logic — OpenAI GPT-4o-mini (default), OpenRouter optional
+    if settings.tier1_enabled and (
+        getattr(settings, "openai_api_key", None)
+        or getattr(settings, "tier1_openrouter_api_key", None)
+    ):
+        try:
+            reply_text = call_tier1_model(messages)
+            backend = settings.tier1_provider
+
+            if backend == "openai":
+                model_name = getattr(settings, "tier1_openai_model", "gpt-4o-mini")
+            else:
+                candidates = getattr(
+                    settings, "tier1_openrouter_model_candidates", []
+                )
+                model_name = candidates[0] if candidates else "openrouter"
+
+            return ModelCallResult(
+                text=reply_text,
+                used_tier="tier1",
+                raw={"backend": backend, "model": model_name},
             )
-        else:
-            for model_name in model_list:
-                try:
-                    reply_text = call_tier1_model(messages, model_name)
-                    return ModelCallResult(
-                        text=reply_text,
-                        used_tier="tier1",
-                        raw={"backend": "openrouter", "model": model_name},
-                    )
-                except Tier1Error as exc:
-                    logger.warning("Tier1 model %s failed: %s", model_name, exc)
+        except Tier1Error as exc:
+            logger.warning("Tier1 failed: %s", exc)
+    else:
+        logger.debug(
+            "Tier1 skipped: disabled or no API key "
+            "(openai=%s, openrouter=%s)",
+            bool(getattr(settings, "openai_api_key", None)),
+            bool(getattr(settings, "tier1_openrouter_api_key", None)),
+        )
 
     # 4) Try Tier2 (local) if enabled
     if settings.tier2_enabled:

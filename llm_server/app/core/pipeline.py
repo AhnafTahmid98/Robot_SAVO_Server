@@ -20,6 +20,13 @@ This version:
 - Parses the final JSON block and returns ChatResponse.
 - Tracks per-session conversation history using runtime_state.session_store.
 
+Tier overview:
+- Tier1: Online LLM
+    - By default: OpenAI GPT-4o-mini (via tier1_online.py)
+    - OpenRouter support is kept in code (tier1_online + config) for future use.
+- Tier2: Local LLM (Ollama / llama-cpp, via providers.tier2_local).
+- Tier3: Template fallback (fully offline, via providers.tier3_pi).
+
 IMPORTANT:
 - For non-navigation intents (CHATBOT, STATUS without movement), nav_goal is
   forced to None in the final ChatResponse. Only NAVIGATE/FOLLOW may carry
@@ -449,19 +456,72 @@ async def run_pipeline(chat_req: ChatRequest) -> ChatResponse:
     )
 
     # ------------------------------------------------------------------
-    # 9) Extract final JSON block from model output
+    # 9) Special case: Tier2 (Ollama) → treat raw text as reply
     # ------------------------------------------------------------------
+    if result.used_tier == "tier2":
+        # Deterministic intent wins
+        final_intent = intent
+
+        # For Tier2 we don't expect JSON, so nav_goal comes only from
+        # our deterministic canonical resolver.
+        final_nav_goal: Optional[str] = canonical_nav_goal
+
+        # Only keep nav_goal for navigation-related intents
+        if not is_nav_intent(final_intent):
+            final_nav_goal = None
+
+        # Clamp reply length and ensure non-empty reply
+        reply_text = safety.clamp_reply_text(model_output or "")
+        if not reply_text or not reply_text.strip():
+            logger.warning(
+                "[Robot Savo PIPELINE] Tier2 returned empty content; using fallback."
+            )
+            reply_text = "Sorry, I did not understand that. Can you say it again?"
+
+        # Update session history (best effort)
+        try:
+            session_store.update_from_interaction(
+                session_id=session_id,
+                user_text=clean_user_text,
+                assistant_text=reply_text,
+                intent=final_intent,
+                nav_goal=final_nav_goal,
+            )
+        except Exception:  # noqa: BLE001
+            logger.exception(
+                "[Robot Savo PIPELINE] Failed to update session store for %s",
+                session_id,
+            )
+
+        # Build and return ChatResponse immediately
+        return ChatResponse(
+            reply_text=reply_text,
+            intent=final_intent,
+            nav_goal=final_nav_goal,
+            session_id=session_id,
+            tier_used=result.used_tier,
+        )
+
+    # ------------------------------------------------------------------
+    # 10) Normal path (Tier1/Tier3) with JSON block parsing
+    # ------------------------------------------------------------------
+    # 9) Extract final JSON block from model output
     parsed: Dict[str, Any] = {}
     json_obj = _extract_final_json_block(model_output)
     if json_obj is not None:
         parsed = json_obj
     else:
-        logger.warning("No valid JSON block found in model output; using fallback.")
+        logger.warning(
+            "No valid JSON block found in model output; will fall back to raw text."
+        )
 
-    # ------------------------------------------------------------------
     # 10) Combine deterministic intent/nav_goal with model JSON
-    # ------------------------------------------------------------------
     reply_text = parsed.get("reply_text") or parsed.get("reply") or ""
+
+    # If the model did not give JSON fields, but we DO have some raw text,
+    # use the whole model_output as the reply (good for simple models).
+    if (not reply_text or not reply_text.strip()) and model_output:
+        reply_text = model_output.strip()
 
     model_intent = parsed.get("intent")
     model_nav_goal = parsed.get("nav_goal")
@@ -486,12 +546,17 @@ async def run_pipeline(chat_req: ChatRequest) -> ChatResponse:
         final_nav_goal = None
 
     # ------------------------------------------------------------------
-    # 11) Clamp reply length, update session state, and build ChatResponse
+    # 11) Clamp reply length, ensure non-empty reply, update session state,
+    #     and build ChatResponse
     # ------------------------------------------------------------------
-    # clamp_reply_text() already uses settings.max_reply_chars
     reply_text = safety.clamp_reply_text(reply_text)
 
-    # Update runtime session store (best-effort; failures should not break reply).
+    if not reply_text or not reply_text.strip():
+        logger.warning(
+            "[Robot Savo PIPELINE] Empty reply_text from model; using fallback."
+        )
+        reply_text = "Sorry, I did not understand that. Can you say it again?"
+
     try:
         session_store.update_from_interaction(
             session_id=session_id,
@@ -506,15 +571,13 @@ async def run_pipeline(chat_req: ChatRequest) -> ChatResponse:
             session_id,
         )
 
-    # ChatResponse.intent expects Enum, but Pydantic will coerce from string.
-    response = ChatResponse(
+    return ChatResponse(
         reply_text=reply_text,
-        intent=final_intent,      # e.g. "NAVIGATE"
-        nav_goal=final_nav_goal,  # e.g. "A201" or "Info Desk" or None
+        intent=final_intent,
+        nav_goal=final_nav_goal,
         session_id=session_id,
         tier_used=result.used_tier,
     )
-    return response
 
 
 # ---------------------------------------------------------------------------
