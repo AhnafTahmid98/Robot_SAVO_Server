@@ -41,7 +41,7 @@ class ChatRequest(BaseModel):
     source:
         Origin of the text. Helps with logging and behavior tuning.
     language:
-        BCP-47 language code for the text, e.g. "en", "fi".
+        BCP-47 language code for the text, e.g. "en", "fi", "it".
         For Robot Savo we mainly use "en" now, but it is future-proof.
     session_id:
         Stable identifier for this conversation. The Pi should generate
@@ -66,7 +66,7 @@ class ChatRequest(BaseModel):
     )
     language: Optional[str] = Field(
         default="en",
-        description="BCP-47 language code of user_text (e.g. 'en', 'fi').",
+        description="BCP-47 language code of user_text (e.g. 'en', 'fi', 'it').",
         example="en",
     )
     session_id: Optional[str] = Field(
@@ -95,11 +95,25 @@ class ChatRequest(BaseModel):
                     "meta": {"client": "pi5", "env": "lab"},
                 },
                 {
-                    "user_text": "Can you guide me to A201?",
+                    "user_text": "Can you guide me to Campus Heart?",
                     "source": "keyboard",
                     "language": "en",
                     "session_id": "dev-session-001",
                     "meta": {"client": "dev-shell"},
+                },
+                {
+                    "user_text": "Voitko auttaa minua?",
+                    "source": "mic",
+                    "language": "fi",
+                    "session_id": "fi-session-001",
+                    "meta": {"client": "pi5"},
+                },
+                {
+                    "user_text": "Puoi guidarmi al Campus Heart?",
+                    "source": "mic",
+                    "language": "it",
+                    "session_id": "it-session-001",
+                    "meta": {"client": "pi5"},
                 },
             ]
         }

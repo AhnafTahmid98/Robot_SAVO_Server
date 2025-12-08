@@ -14,7 +14,7 @@ We deliberately:
 
 from __future__ import annotations
 
-from typing import Any, Dict, Optional
+from typing import Any, Dict, Optional, Tuple  
 
 import threading
 
@@ -83,13 +83,17 @@ def _load_model() -> WhisperModel:
         return _model
 
 
-def transcribe_audio_bytes(audio_bytes: bytes) -> str:
+def transcribe_audio_bytes(audio_bytes: bytes) -> Tuple[str, Optional[str]]:  # <<< CHANGED (returns transcript + lang)
     """
-    Run STT on raw audio bytes and return a transcript string.
+    Run STT on raw audio bytes and return (transcript, detected_language).
 
     The input is assumed to be 16-bit PCM in a container (WAV, OGG, etc.).
     The decoding is handled by audio_utils before calling this function
     at the pipeline level; here we only care about the NumPy waveform.
+
+    Returns:
+      transcript: str
+      detected_language: Optional[str]  (BCP-47-ish code like "en", "fi", "it")
     """
     if not audio_bytes:
         raise RuntimeError("Empty audio payload; nothing to transcribe")
@@ -112,24 +116,40 @@ def transcribe_audio_bytes(audio_bytes: bytes) -> str:
         sample_rate,
     )
 
-    # faster-whisper expects a 1D float32 NumPy array and the sample rate
-    language = settings.stt_language or None
+    # faster-whisper expects a 1D float32 NumPy array and the sample rate.
+    # Multilingual logic:
+    #   - If STT_LANGUAGE is "auto" or empty -> let the model detect language.
+    #   - If STT_LANGUAGE is a code (e.g. "en", "fi") -> force that language.
+    raw_lang = (settings.stt_language or "").strip().lower()
+    if raw_lang in ("", "auto", "automatic"):
+        language_arg = None  # auto-detect
+    else:
+        language_arg = raw_lang  # fixed language from config
 
-    segments, _info = model.transcribe(
+    segments, info = model.transcribe(  # <<< CHANGED (capture info, allow auto language)
         samples,
         beam_size=1,
-        language=language,
+        language=language_arg,
     )
 
     # Concatenate segments into a single transcript
     transcript_parts = [seg.text for seg in segments]
     transcript = " ".join(part.strip() for part in transcript_parts).strip()
 
-    logger.info("STT transcript: %r", transcript)
-    return transcript
+    # Detected language from the model (if we did auto-detect)
+    detected_language: Optional[str]
+    if language_arg is None:
+        # info.language is e.g. "en", "fi", "it"
+        detected_language = getattr(info, "language", None)
+    else:
+        # We forced a language; report that.
+        detected_language = language_arg
+
+    logger.info("STT transcript: %r (lang=%r)", transcript, detected_language)
+    return transcript, detected_language
 
 
-def call_llm(transcript: str) -> Dict[str, Any]:
+def call_llm(transcript: str, language: Optional[str] = None) -> Dict[str, Any]:  # <<< CHANGED (added language)
     """
     Call the Robot Savo LLM /chat endpoint with the transcript.
 
@@ -144,7 +164,7 @@ def call_llm(transcript: str) -> Dict[str, Any]:
     settings = Settings.from_env()
     llm_url = settings.llm_server_url.rstrip("/") + "/chat"
 
-    payload = {
+    payload: Dict[str, Any] = {
         "source": "mic",
         "robot_id": settings.robot_id,
         "user_text": transcript,
@@ -153,7 +173,12 @@ def call_llm(transcript: str) -> Dict[str, Any]:
         # update this payload accordingly.
     }
 
-    logger.info("Calling LLM server at %s", llm_url)
+    # Pass BCP-47 language code to LLM server if we have one.
+    # ChatRequest.language defaults to "en", so we only override when known.
+    if language:
+        payload["language"] = language  # <<< CHANGED (send language to LLM)
+
+    logger.info("Calling LLM server at %s (lang=%r)", llm_url, language)
 
     try:
         with httpx.Client(timeout=settings.llm_timeout_s) as client:
@@ -175,7 +200,7 @@ def call_llm(transcript: str) -> Dict[str, Any]:
     # {
     #   "reply_text": "...",
     #   "intent": "NAVIGATE",
-    #   "nav_goal": "A201",
+    #   "nav_goal": "Campus Heart",
     #   "tier_used": "TIER1",
     #   ...
     # }
@@ -213,11 +238,11 @@ def run_speech_pipeline(audio_bytes: bytes) -> Dict[str, Any]:
     settings = Settings.from_env()
 
     # 1) STT
-    transcript = transcribe_audio_bytes(audio_bytes)
+    transcript, detected_language = transcribe_audio_bytes(audio_bytes)  # <<< CHANGED
 
     # 2) Call LLM (best-effort)
     try:
-        llm_result = call_llm(transcript)
+        llm_result = call_llm(transcript, detected_language)  # <<< CHANGED
         llm_ok = True
     except Exception as exc:  # noqa: BLE001
         logger.warning("LLM call failed (continuing with transcript only): %s", exc)
@@ -236,6 +261,7 @@ def run_speech_pipeline(audio_bytes: bytes) -> Dict[str, Any]:
         "nav_goal": llm_result["nav_goal"],
         "tier_used": llm_result["tier_used"],
         "llm_ok": llm_ok,
+        "language": detected_language,  # <<< CHANGED (include detected language)       
     }
 
     logger.info(

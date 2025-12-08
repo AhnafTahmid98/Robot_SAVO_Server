@@ -67,6 +67,7 @@ async def chat_endpoint(request: ChatRequest) -> ChatResponse:
         "[/chat] source=%s session_id=%s text=%r",
         request.source.value,
         session_id,
+        request.language,
         request.user_text,
     )
 

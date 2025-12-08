@@ -398,8 +398,11 @@ async def run_pipeline(chat_req: ChatRequest) -> ChatResponse:
     base_meta = dict(chat_req.meta or {})
     # Ensure session_id is always present in meta for downstream logging/prompts.
     base_meta["session_id"] = session_id
+    # Optional: expose user language to prompts as META.user_language
+    base_meta["user_language"] = chat_req.language or "en"
 
     meta_with_live = _attach_live_context(clean_user_text, base_meta)
+
 
     # Attach telemetry + locations + canonical goal
     meta_with_live["nav_state"] = nav_state_meta

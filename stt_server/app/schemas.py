@@ -42,12 +42,17 @@ class SpeechResponse(BaseModel):
 
     This is what the Pi receives after sending audio. It is intentionally
     aligned with the Robot Savo LLM ChatResponse structure, with additional
-    fields for the raw transcript and LLM call status.
+    fields for the raw transcript, detected language and LLM call status.
     """
 
     transcript: str = Field(
         ...,
         description="Recognized user speech in plain text (STT result).",
+    )
+
+    language: Optional[str] = Field(
+        default=None,
+        description="Detected language code for the transcript (e.g. 'en', 'fi', 'it').",
     )
 
     reply_text: str = Field(

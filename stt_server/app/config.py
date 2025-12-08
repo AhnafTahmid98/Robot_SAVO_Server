@@ -8,9 +8,11 @@ on pydantic-settings, so it works cleanly inside Docker and in local venvs.
 Environment variables (suggested defaults in brackets):
 
   STT_MODELS_DIR      [/models]          Directory where faster-whisper models live
-  STT_MODEL_NAME      [small.en]         Model size or path (e.g. small.en, medium.en)
+  STT_MODEL_NAME      [small]            Model size or path (e.g. small, small.en, medium)
   STT_DEVICE          [cpu]              "cpu", "cuda", or "auto"
-  STT_LANGUAGE        [en]               Language hint for faster-whisper (None = auto)
+  STT_LANGUAGE        [auto]             Language hint for faster-whisper
+                                         - "auto" or empty -> automatic detection
+                                         - "en", "fi", "it", ... -> fixed language code
 
   LLM_SERVER_URL      [http://llm_server:8000]
                                          Base URL for Robot Savo LLM server inside Docker
@@ -34,7 +36,7 @@ class Settings:
     stt_models_dir: str
     stt_model_name: str
     stt_device: str
-    stt_language: Optional[str]
+    stt_language: Optional[str]  # None = let faster-whisper auto-detect
 
     # LLM config
     llm_server_url: str
@@ -51,10 +53,18 @@ class Settings:
         Minimal validation is applied (e.g. LLM_SERVER_URL must be a valid URL).
         """
         stt_models_dir = os.getenv("STT_MODELS_DIR", "/models")
-        stt_model_name = os.getenv("STT_MODEL_NAME", "small.en")
+
+        # Multilingual model by default
+        stt_model_name = os.getenv("STT_MODEL_NAME", "small")
+
         stt_device = os.getenv("STT_DEVICE", "cpu").lower()
-        stt_language_raw = os.getenv("STT_LANGUAGE", "en")
-        stt_language = stt_language_raw if stt_language_raw else None
+
+        # "auto" or empty string → None → automatic language detection
+        stt_language_raw = os.getenv("STT_LANGUAGE", "auto")
+        if not stt_language_raw or stt_language_raw.lower() == "auto":
+            stt_language: Optional[str] = None
+        else:
+            stt_language = stt_language_raw
 
         llm_server_url = os.getenv("LLM_SERVER_URL", "http://llm_server:8000")
         _validate_url(llm_server_url, env_name="LLM_SERVER_URL")

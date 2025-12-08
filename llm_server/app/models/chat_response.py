@@ -53,7 +53,7 @@ class ChatResponse(BaseModel):
         Robot Savo uses this to decide what mode to act in.
     nav_goal:
         Canonical location name when intent is navigation-related
-        (e.g. "A201", "Info Desk"). May also be set for STATUS/STOP
+        (e.g. "Campus Heart", "Info Desk"). May also be set for STATUS/STOP
         when describing or cancelling the current navigation target.
         Null if not applicable.
     session_id:
@@ -77,7 +77,7 @@ class ChatResponse(BaseModel):
         default=None,
         description=(
             "Canonical navigation target when intent is NAVIGATE/FOLLOW/STOP/STATUS "
-            "(e.g. 'A201', 'Info Desk'). Null when not navigation-related."
+            "(e.g. 'Campus Heart', 'Info Desk'). Null when not navigation-related."
         ),
     )
     session_id: Optional[str] = Field(
