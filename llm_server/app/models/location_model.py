@@ -79,11 +79,37 @@ from app.core.config import settings
 class LocationType(str, Enum):
     """High-level type/category of a location."""
 
+    # Generic
     ROOM = "ROOM"
-    SERVICE = "SERVICE"
     AREA = "AREA"
     BUILDING = "BUILDING"
     OTHER = "OTHER"
+
+    # Teaching & work spaces
+    CLASSROOM = "CLASSROOM"
+    LAB = "LAB"
+    OFFICE = "OFFICE"
+    MEETING_ROOM = "MEETING_ROOM"
+
+    # Services / public points
+    SERVICE = "SERVICE"       # generic service point
+    RECEPTION = "RECEPTION"   # info/reception desks
+    CAFE = "CAFE"
+    LIBRARY = "LIBRARY"
+    KIOSK = "KIOSK"
+
+    # Circulation / access
+    LOBBY = "LOBBY"
+    HALLWAY = "HALLWAY"
+    ENTRANCE = "ENTRANCE"
+    EXIT = "EXIT"
+    STAIRS = "STAIRS"
+    ELEVATOR = "ELEVATOR"
+
+    # Facilities
+    RESTROOM = "RESTROOM"
+    STORAGE = "STORAGE"
+    PARKING = "PARKING"
 
 
 class Location(BaseModel):
